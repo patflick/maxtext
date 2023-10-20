@@ -63,7 +63,7 @@ record_internal_nn_metrics: 0
 
 # Output directory
 # Create a GCS bucket, e.g. my-maxtext-outputs and set this to "gs://my-maxtext-outputs/"
-base_output_directory: ""
+base_output_directory: "gs://test-example-123/maxtest-lg/"
 
 # Parallelism
 mesh_axes: ['data', 'fsdp', 'tensor']
@@ -96,7 +96,7 @@ ici_tensor_parallelism: 1
 
 # Dataset
 # Replace with your path given as argument in download_dataset.sh, e.g. "gs://my-maxtext-dataset/"
-dataset_path: ""
+dataset_path: "gs://test-example-123/"
 vocab_size: 32_768 # powers of 2 for sharding
 assets_path: "assets"
 vocab_relative_path: "tokenizer"  # Assumes we're allowed
@@ -106,7 +106,7 @@ eval_split: 'validation'
 per_device_batch_size: 12.0
 eval_per_device_batch_size: 0
 max_corpus_chars: 10_000_000
-dataset_type: c4 # must be c4 or synthetic
+dataset_type: cnndm # must be c4 or synthetic
 
 # Training loop
 steps: 150_001 # If set to -1 then will inherit value from learning_rate_schedule_steps
