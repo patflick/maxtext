@@ -1,5 +1,6 @@
 orbax-checkpoint
 absl-py
+aqtp
 argparse
 cloud-tpu-diagnostics
 datetime
@@ -13,7 +14,7 @@ protobuf==3.20.3
 pylint
 pytest
 sentencepiece==0.1.97
-tensorflow==2.13.*
+tensorflow
 tensorflow-datasets
 tensorflow-text
 tensorboardx
