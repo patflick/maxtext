@@ -160,7 +160,7 @@ def _dataset_common(is_training:bool, percore_batch_size: int, TRAINING_SEED=873
       dataset_split='train' if is_training else 'validation',
       use_cached=False,
       num_epochs=None,
-      feature_converter=seqio.seqio.DecoderFeatureConverter(
+      feature_converter=seqio.seqio.PrefixLMFeatureConverter(
           pack=False
       ),
       shuffle=True if is_training else False,
@@ -182,6 +182,8 @@ def get_cnndm_datasets(
 
   return train_ds, eval_ds
 
+# TODO / FIXME: should return the tokenizer!!
+# TODO: use the config for input sizing
 def make_cnndm_train_iterator_and_tokenizer(config):
   """ Make train iterator and tokenizer for cnndm dataset"""
   train_ds, eval_ds = get_cnndm_datasets(
@@ -189,9 +191,22 @@ def make_cnndm_train_iterator_and_tokenizer(config):
   )
 
   def filter_keys(record):
-    return {'inputs': record['decoder_input_tokens'], 'targets': record['decoder_target_tokens'],
-    'inputs_segmentation':record['decoder_causal_attention'], 
+    """
+    Maps data records from the PrefixLMFeatureConverter format to the format
+    expected by MaxText train.py.
+    """
+    data = {
+      'inputs': record['decoder_input_tokens'],
+      'targets': record['decoder_target_tokens'],
+      'decoder_causal_attention': record['decoder_causal_attention'],
+      # UNSUPPORTED 'decoder_loss_weights': record['decoder_loss_weights']
     }
+    if 'decoder_segment_ids' in record:
+      data['inputs_segmentation'] = record['decoder_segment_ids']
+    if 'decoder_positions' in record:
+      data['inputs_position']: record['decoder_positions']
+
+    return data
     
   train_ds = train_ds.map(filter_keys,num_parallel_calls=tf.data.AUTOTUNE)
   eval_ds = eval_ds.map(filter_keys,num_parallel_calls=tf.data.AUTOTUNE)

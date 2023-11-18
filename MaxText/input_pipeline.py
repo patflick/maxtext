@@ -301,35 +301,17 @@ class SyntheticDataIterator():
                                                     dtype=jax.numpy.int32)
     return output
 
-def multi_host_prepare(dataset, batch_size, max_length, global_mesh, data_sharding):
-  # Multihost dataloading: sharding and jax.Array prep function
-  dataset_structure = tf.data.experimental.get_structure(dataset)
-  global_data_shape = jax.tree_map(
-      lambda x: P(batch_size, max_length), dataset_structure
-  )
-  data_axes = jax.tree_map(lambda x: P(*data_sharding), dataset_structure)
-  assert (
-        batch_size % global_mesh.size == 0
-    ), 'Batch size should be divisible number of global devices. ' + 'batch_size: ' + str(batch_size) + 'mesh_size: ' + str(global_mesh.size)
-
-  multihost_gen = (
-      multihost_dataloading.get_batch_sharded_data_pipeline(
-          dataset, data_sharding, global_data_shape, global_mesh, data_axes
-      )
-  )
-  return multihost_gen
-
 def create_data_iterator_with_tokenizer(config, mesh):
   if config.dataset_type == "synthetic":
     return SyntheticDataIterator(config, mesh), None
   elif config.dataset_type == "c4":
-    return make_c4_train_iterator_and_tokenizer(config)
+    return make_c4_train_iterator_and_tokenizer(config, mesh)
   elif config.dataset_type == "cnndm":
     per_device_batch_size=1
     train_ds, eval_ds = make_cnndm_train_iterator_and_tokenizer(per_device_batch_size)
-    train_iter = multi_host_prepare(train_ds, per_device_batch_size * jax.device_count() ,2048+256, mesh, config.data_sharding)
-    eval_iter = multi_host_prepare(eval_ds, per_device_batch_size * jax.device_count() ,2048+256, mesh, config.data_sharding)
-    return train_iter, eval_iter
+    train_iter = multihost_dataloading.get_batch_sharded_data_pipeline(train_ds, mesh)
+    eval_iter = multihost_dataloading.get_batch_sharded_data_pipeline(eval_ds, mesh)
+    return train_iter, None #eval_iter
   else:
     assert False, "dataset type not implemented"
 
