@@ -182,11 +182,15 @@ def train_step(model, config, state, data, dropout_rng):
     data[k] = v[:config.global_batch_size_to_train_on,:]
 
   def loss_fn(params):
+    decoder_causal_attention = None
+    if 'decoder_causal_attention' in data:
+      decoder_causal_attention = data['decoder_causal_attention']
     logits, intermediate_outputs = model.apply({'params': params},
                          data['inputs'],
                          data['targets'],
                          data['inputs_segmentation'],
-                         None,
+                         data['inputs_position'],
+                         decoder_causal_attention,
                          enable_dropout=config.enable_dropout,
                          rngs={'dropout': rng1, 'aqt': aqt_rng}, mutable='intermediates')
     one_hot_targets = jax.nn.one_hot(data['targets'], config.vocab_size)

@@ -1216,6 +1216,7 @@ class Transformer(nn.Module):
       decoder_target_tokens,
       decoder_segment_ids=None,
       decoder_positions=None,
+      decoder_causal_attention=None,
       enable_dropout=True,
       decode=False,
       max_decode_length=None):
@@ -1231,6 +1232,7 @@ class Transformer(nn.Module):
       decoder_mask = make_decoder_mask(
           decoder_target_tokens=decoder_target_tokens,
           dtype=cfg.dtype,
+          decoder_causal_attention=decoder_causal_attention,
           decoder_segment_ids=decoder_segment_ids)
 
     # Add segmentation block-diagonal attention masks if using segmented data.
