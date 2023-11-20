@@ -57,7 +57,7 @@ logits_via_embedding: True  # NOTE: this is True just for testing.
 remat_policy: 'full'
 scan_layers: True
 param_scan_axis: 1
-enable_flash_attention: True
+enable_flash_attention: False
 
 record_internal_nn_metrics: 0
 

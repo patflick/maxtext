@@ -199,7 +199,7 @@ def make_cnndm_train_iterator_and_tokenizer(config):
       'inputs': record['decoder_input_tokens'],
       'targets': record['decoder_target_tokens'],
       'decoder_causal_attention': record['decoder_causal_attention'],
-      # UNSUPPORTED 'decoder_loss_weights': record['decoder_loss_weights']
+      'decoder_loss_weights': record['decoder_loss_weights'],
     }
     if 'decoder_segment_ids' in record:
       data['inputs_segmentation'] = record['decoder_segment_ids']
