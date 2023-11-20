@@ -186,7 +186,7 @@ def train_step(model, config, state, data, dropout_rng):
                          data['inputs'],
                          data['targets'],
                          data.get('inputs_segmentation'),
-                         data.get('inputs_position'),      
+                         data.get('inputs_position'),
                          data.get('decoder_causal_attention'),
                          enable_dropout=config.enable_dropout,
                          rngs={'dropout': rng1, 'aqt': aqt_rng}, mutable='intermediates')
@@ -194,7 +194,11 @@ def train_step(model, config, state, data, dropout_rng):
     xent, _ = max_utils.cross_entropy_with_logits(logits, one_hot_targets, 0.0)
     xent = nn.with_logical_constraint(xent, ('activation_batch', 'activation_length'))
     # Mask out paddings at the end of each example.
-    xent = xent * (data['inputs_segmentation'] != 0)
+    if 'inputs_segmentation' in data:
+      xent = xent * (data['inputs_segmentation'] != 0)
+    # Mask loss weights
+    if 'decoder_loss_weights' in data:
+      xent = xent * (data['decoder_loss_weights'])
     return jnp.sum(xent)/jnp.size(xent), intermediate_outputs
 
   grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
