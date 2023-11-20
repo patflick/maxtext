@@ -1047,6 +1047,7 @@ class DecoderLayer(nn.Module):
             lnx,
             lnx,
             decoder_segment_ids=decoder_segment_ids,
+            enable_flash_attention = cfg.enable_flash_attention,
             inputs_positions=decoder_positions,
             mask=decoder_mask,
             bias = None,
