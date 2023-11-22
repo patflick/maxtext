@@ -12,12 +12,14 @@ import seqio
 import t5.data
 from t5.data import preprocessors as t5_preprocessors
 from t5.evaluation import metrics as t5_metrics
+import tensorflow_text as tftxt
 
 from jax.sharding import PartitionSpec as P
 import tensorflow as tf
 
 GPT_SPM_PATH = (
-    'gs://mlperf-llm-public2/vocab/c4_en_301_5Mexp2_spm.model'
+    "/home/patflick/dev/git/maxtext/assets/tokenizer"
+    #'gs://mlperf-llm-public2/vocab/c4_en_301_5Mexp2_spm.model'
 )
 GPT_EOS_ID = 1
 GPT_VOCABULARY = t5.data.SentencePieceVocabulary(GPT_SPM_PATH)
