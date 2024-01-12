@@ -178,6 +178,8 @@ def create_kill_command_str(args):
   fi"""
 
 def download_from_gcs(zip_gcs_path):
+  if zip_gcs_path is None:
+    return ""
   return f"""
     echo "{write_download_from_gcs_sh(zip_gcs_path)}" > download_from_gcs.sh
     bash download_from_gcs.sh
@@ -303,26 +305,28 @@ def main(raw_args=None) -> None:
   print_flags(args)
 
   ##### Step 1: Zip code and move it to GCS #####
-  tmp_dir_relative_to_script = os.path.join("tmp", args.RUN_NAME, "")
-  tmp_dir = os.path.join(args.SCRIPT_DIR, tmp_dir_relative_to_script)
-  zip_name = "script_dir_zip_" + args.RUN_NAME + ".tar.gz"
-  bucket_dir = os.path.join(args.BUCKET_DIR, args.RUN_NAME)
-  bucket_path = os.path.join(f"gs://{args.BUCKET_NAME}", bucket_dir)
-  startup_script_file = os.path.join(tmp_dir, "startup_script.txt")
+  zip_gcs_path = None
+  if args.SCRIPT_DIR:
+    tmp_dir_relative_to_script = os.path.join("tmp", args.RUN_NAME, "")
+    tmp_dir = os.path.join(args.SCRIPT_DIR, tmp_dir_relative_to_script)
+    zip_name = "script_dir_zip_" + args.RUN_NAME + ".tar.gz"
+    bucket_dir = os.path.join(args.BUCKET_DIR, args.RUN_NAME)
+    bucket_path = os.path.join(f"gs://{args.BUCKET_NAME}", bucket_dir)
+    startup_script_file = os.path.join(tmp_dir, "startup_script.txt")
 
-  print(f"Moving {args.SCRIPT_DIR} to {bucket_path}...")
-  captured_output = move_script_dir_to_gcs(args.SCRIPT_DIR, tmp_dir_relative_to_script, zip_name, bucket_path)
-  if captured_output.returncode != 0:
-    print("\n\n Moving code to GCS failed")
-    print(f"Running 'gsutil mv zip {bucket_path}' failed with error: ")
-    print(captured_output.stderr.decode())
-    print("\nYou may need to run 'gcloud auth login'")
-    return -1
-  print("Move successful!\n")
+    print(f"Moving {args.SCRIPT_DIR} to {bucket_path}...")
+    captured_output = move_script_dir_to_gcs(args.SCRIPT_DIR, tmp_dir_relative_to_script, zip_name, bucket_path)
+    if captured_output.returncode != 0:
+      print("\n\n Moving code to GCS failed")
+      print(f"Running 'gsutil mv zip {bucket_path}' failed with error: ")
+      print(captured_output.stderr.decode())
+      print("\nYou may need to run 'gcloud auth login'")
+      return -1
+    print("Move successful!\n")
+    zip_gcs_path=os.path.join(bucket_path,zip_name)
 
   #### Step 2: Run the CQR command ####
   log_name = "main_command_log_slice_${SLICE_ID}_worker_${WORKER_ID}"
-  zip_gcs_path = os.path.join(bucket_path, zip_name)
   write_startup_script(zip_gcs_path, zip_name, log_name, bucket_path, startup_script_file, args)
 
   print("Running CQR command...")
