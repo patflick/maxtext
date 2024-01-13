@@ -45,6 +45,8 @@ import subprocess
 from datetime import datetime
 import os
 import shutil
+import time
+import yaml
 
 
 
@@ -131,6 +133,7 @@ def run_create_resources(startup_script_file, args):
 
 def write_startup_script(zip_gcs_path, zip_name, log_name, bucket_path, startup_script_file, args):
   """ Write the startup script locally into a file to be passed to the CQR command. """
+  unzip_command = "tar xzf {zip_name}" if zip_name else ""
   startup_script = f"""#!/bin/bash
 mkdir -p {args.RUN_NAME}
 cd {args.RUN_NAME}
@@ -140,7 +143,7 @@ sudo python3 -m virtualenv venv
 source venv/bin/activate
 ulimit -n 100000
 (({download_from_gcs(zip_gcs_path)}
-tar xzf {zip_name}
+{unzip_command}
 {args.COMMAND}) 2>&1) >> {log_name}
 (echo "{finish_status_str()}") >> {log_name}
 gsutil cp {log_name} "{bucket_path}/"
@@ -169,13 +172,22 @@ def finish_status_str():
   return """multihost_job finished main command on slice $SLICE_ID worker $WORKER_ID at $(date "+%Y-%m-%d %H:%M:%S") UTC with exit status $?.
 This worker will immediately send its logs to GCS."""
 
+def get_delete_command_str(args):
+  # pylint: disable=line-too-long
+  return f"gcloud alpha compute tpus queued-resources delete {args.RUN_NAME} --force --quiet --project={args.PROJECT} --zone={args.ZONE}"
+
 def create_kill_command_str(args):
   # pylint: disable=line-too-long
   return f"""if [[ $SLICE_ID -eq 0 && $WORKER_ID -eq 0 ]]; then
   echo "This worker (slice 0 worker 0) will wait 10 minutes before tearing down the job to allow other workers to gracefully exit."
   sleep 600
-  gcloud alpha compute tpus queued-resources delete {args.RUN_NAME} --force --quiet --project={args.PROJECT} --zone={args.ZONE}
+  {get_delete_command_str(args)}
   fi"""
+
+def run_delete_resource(args):
+  command = get_delete_command_str(args)
+  captured_output = subprocess.run(command, check=False, shell=True, capture_output=True)
+  return captured_output
 
 def download_from_gcs(zip_gcs_path):
   if zip_gcs_path is None:
@@ -255,6 +267,68 @@ def gcs_bucket_url(bucket_name, bucket_dir, project):
   bucket_path = os.path.join(bucket_name, bucket_dir)
   return f"https://console.cloud.google.com/storage/browser/{bucket_path}?project={project}"
 
+def run_describe_command(args):
+  """ Runs `queued-resources describe <args.RUN_NAME>, returns parsed yaml.
+
+  Returns the python dict parsed from the yaml printed by `queued-resource
+  describe`.
+
+  Returns `None` if the QR doesn't exist.
+  """
+  command = fr'gcloud alpha compute tpus queued-resources describe "{args.RUN_NAME}" --project={args.PROJECT} --zone={args.ZONE}'
+  captured_output = subprocess.run(command, check=False,
+                                   shell=True, capture_output=True)
+  return yaml.safe_load(captured_output.stdout)
+
+def get_qr_state(args):
+  """ Returns the state of the QR, e.g. 'FAILED', 'ACTIVE', 'PROVISIONING' """
+  qr_descr = run_describe_command(args)
+  if qr_descr is None:
+    return None
+  return qr_descr.get("state", {}).get("state")
+
+def is_internal_error_13(args):
+  """ Returns whether the given QR has FAILED with error code 13 """
+  qr_descr = run_describe_command(args)
+  if qr_descr is None:
+    return False
+  state = qr_descr.get("state", {})
+  if state.get("state") == "FAILED" and state.get("failedData",{}).get("error", {}).get("code") == 13:
+    return True
+  return False
+
+def wait_on_qr_state(args, list_of_states = ["FAILED", "ACTIVE"], max_wait_time = 60*60):
+  """ Waits until the queued-resource state is one of `list_of_states`.
+
+  Periodically polls the current state of job `run_name`.
+  Returns if any of:
+  - the queued-resource state is in `list_of_states`
+  - queued-resource with name run_name no longer exists (e.g. it was deleted)
+  - an error occured while running the `queued-resource describe` command
+  - reached the max_wait_time
+  """
+  start_time = time.time()
+  prev_state = None
+  set_of_states = set(list_of_states)
+  while True:
+    cur_state = get_qr_state(args)
+    if cur_state is None:
+      print(f"Failed to get current state of job {run_name}")
+      return None
+    if cur_state != prev_state:
+      timestamp = datetime.now().replace(microsecond=0).isoformat()
+      print(f"{timestamp} - state changed to {cur_state}")
+      if cur_state in set_of_states:
+        return cur_state
+    cur_wait_time = (time.time() - start_time)
+    if max_wait_time and cur_wait_time > max_wait_time:
+      timestamp = datetime.now().replace(microsecond=0).isoformat()
+      print(f"{timestamp} - reached max_wait_time after {cur_wait_time} s, exiting")
+      return None
+
+    time.sleep(10)
+    prev_state = cur_state
+
 ################### Main ###################
 def main(raw_args=None) -> None:
     ##### Define flags #####
@@ -267,7 +341,7 @@ def main(raw_args=None) -> None:
                       help='The number of slices to run the job on')
   parser.add_argument('--SCRIPT_DIR', type=str, default=os.getcwd(),
                       help='The local location of the directory to copy to the TPUs and run the main command from. \
-                        Defaults to current working directory.')
+                        Defaults to current working directory. If set to the empty string, nothing will be copied.')
   parser.add_argument('--COMMAND', type=str, default=None, required=True,
                       help='Main command to run on each TPU. \
                         This command is run from a copied version of SCRIPT_DIR on each TPU worker. \
@@ -288,6 +362,10 @@ def main(raw_args=None) -> None:
                       --CQR_EXTRA_ARGS="--reserved --service-account=my-service-account-email-address')
   parser.add_argument('--ENABLE_AUTOCHECKPOINT', type=bool, default=False,
                       help='Whether to enable the Autocheckpoint feature')
+  parser.add_argument('--RETRY_UNTIL_ACTIVE', type=bool, default=False,
+                      help='Whether to retry creating the queued-resource if it enters a known FAILED state.')
+  parser.add_argument('--RETRY_MAX_ATTEMPTS', type=int, default=10,
+                      help='Maximum number of retries prior to giving up.')
   args = parser.parse_args(raw_args)
 
 
@@ -305,15 +383,16 @@ def main(raw_args=None) -> None:
   print_flags(args)
 
   ##### Step 1: Zip code and move it to GCS #####
+  tmp_dir_relative_to_script = os.path.join("tmp", args.RUN_NAME, "")
+  tmp_dir = os.path.join(args.SCRIPT_DIR or ".", tmp_dir_relative_to_script)
+  os.makedirs(tmp_dir, exist_ok=True)
+  startup_script_file = os.path.join(tmp_dir, "startup_script.txt")
+  bucket_dir = os.path.join(args.BUCKET_DIR, args.RUN_NAME)
+  bucket_path = os.path.join(f"gs://{args.BUCKET_NAME}", bucket_dir)
   zip_gcs_path = None
+  zip_name = None
   if args.SCRIPT_DIR:
-    tmp_dir_relative_to_script = os.path.join("tmp", args.RUN_NAME, "")
-    tmp_dir = os.path.join(args.SCRIPT_DIR, tmp_dir_relative_to_script)
     zip_name = "script_dir_zip_" + args.RUN_NAME + ".tar.gz"
-    bucket_dir = os.path.join(args.BUCKET_DIR, args.RUN_NAME)
-    bucket_path = os.path.join(f"gs://{args.BUCKET_NAME}", bucket_dir)
-    startup_script_file = os.path.join(tmp_dir, "startup_script.txt")
-
     print(f"Moving {args.SCRIPT_DIR} to {bucket_path}...")
     captured_output = move_script_dir_to_gcs(args.SCRIPT_DIR, tmp_dir_relative_to_script, zip_name, bucket_path)
     if captured_output.returncode != 0:
@@ -326,16 +405,33 @@ def main(raw_args=None) -> None:
     zip_gcs_path=os.path.join(bucket_path,zip_name)
 
   #### Step 2: Run the CQR command ####
-  log_name = "main_command_log_slice_${SLICE_ID}_worker_${WORKER_ID}"
-  write_startup_script(zip_gcs_path, zip_name, log_name, bucket_path, startup_script_file, args)
-
-  print("Running CQR command...")
-  captured_output = run_create_resources(startup_script_file, args)
-  if captured_output.returncode != 0:
-    print(f"\n\nCreate resource request returned with ERROR returncode {captured_output.returncode}.\n")
-    print("Create resource error:\n" + captured_output.stderr.decode())
-    return 1
-  print("CQR command received! TPUs are being created.\n")
+  original_run_name = args.RUN_NAME
+  for attempt in range(args.RETRY_MAX_ATTEMPTS):
+    log_name = "main_command_log_slice_${SLICE_ID}_worker_${WORKER_ID}"
+    if attempt > 0:
+      log_name += f"_attempt_{attempt+1}"
+      args.RUN_NAME = f"{original_run_name}_attempt{attempt+1}"
+      print(f"Retrying with run name {args.RUN_NAME}")
+    write_startup_script(zip_gcs_path, zip_name, log_name, bucket_path, startup_script_file, args)
+    print("Running CQR command...")
+    captured_output = run_create_resources(startup_script_file, args)
+    if captured_output.returncode != 0:
+      print(f"\n\nCreate resource request returned with ERROR returncode {captured_output.returncode}.\n")
+      print("Create resource error:\n" + captured_output.stderr.decode())
+      return 1
+    print("CQR command received! TPUs are being created.\n")
+    if not args.RETRY_UNTIL_ACTIVE:
+      break
+    else:
+      print("Waiting for either ACTIVE or FAILED state")
+      state = wait_on_qr_state(args, list_of_states=["ACTIVE", "FAILED"])
+      if state == "FAILED" and is_internal_error_13(args):
+        print(f"Job {args.RUN_NAME} FAILED with internal error code 13. Retrying...")
+        run_delete_resource(args)
+        # delete QR
+        continue
+      else:
+        break
 
   #### Step 3: Cleanup ####
   # Cleanup locally created directory
