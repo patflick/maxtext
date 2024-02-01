@@ -114,7 +114,12 @@ def move_script_dir_to_gcs(script_dir, tmp_dir, zip_name, bucket_path):
 def run_create_resources(startup_script_file, args):
   """ Run the Create Queued Resources (CQR) request """
   # pylint: disable=line-too-long
-  command = fr'gcloud alpha compute tpus queued-resources create {args.RUN_NAME} --accelerator-type={args.TPU_TYPE} --runtime-version={args.VERSION} --project={args.PROJECT} --zone={args.ZONE}'
+  if args.TYPE and args.TOPOLOGY:
+    # create with custom topology if given
+    tpu_type = f"--type={args.TYPE} --topology={args.TOPOLOGY}"
+  else:
+    tpu_type = f"--accelerator-type={args.TPU_TYPE}"
+  command = fr'gcloud alpha compute tpus queued-resources create {args.RUN_NAME} {tpu_type} --runtime-version={args.VERSION} --project={args.PROJECT} --zone={args.ZONE}'
   if args.NUM_SLICES > 1:
     command = command + f' --node-prefix={args.RUN_NAME} --node-count={args.NUM_SLICES}'
   else:
@@ -313,7 +318,7 @@ def wait_on_qr_state(args, list_of_states = ["FAILED", "ACTIVE"], max_wait_time 
   while True:
     cur_state = get_qr_state(args)
     if cur_state is None:
-      print(f"Failed to get current state of job {run_name}")
+      print(f"Failed to get current state of job {args.RUN_NAME}. Run may be complete.")
       return None
     if cur_state != prev_state:
       timestamp = datetime.now().replace(microsecond=0).isoformat()
@@ -334,7 +339,11 @@ def main(raw_args=None) -> None:
     ##### Define flags #####
   parser = argparse.ArgumentParser(description='TPU configuration options')
   parser.add_argument('--TPU_TYPE', type=str, default='v4-8',
-                      help='The type of the TPU')
+                      help='The type of the TPU slice')
+  parser.add_argument('--TYPE', type=str, default='',
+                      help='The type of the TPU (e.g. "v5p")')
+  parser.add_argument('--TOPOLOGY', type=str, default='',
+                      help='The topology of the TPU, (e.g. "8x8x8")')
   parser.add_argument('--VERSION', type=str, default='tpu-ubuntu2204-base',
                       help='The runtime version of the TPU')
   parser.add_argument('--NUM_SLICES', type=int, default=2,
@@ -366,6 +375,8 @@ def main(raw_args=None) -> None:
                       help='Whether to retry creating the queued-resource if it enters a known FAILED state.')
   parser.add_argument('--RETRY_MAX_ATTEMPTS', type=int, default=10,
                       help='Maximum number of retries prior to giving up.')
+  parser.add_argument('--WAIT_UNTIL_COMPLETION', type=bool, default=False,
+                      help='Waits until the queued-resource job is finished.')
   args = parser.parse_args(raw_args)
 
 
@@ -423,12 +434,16 @@ def main(raw_args=None) -> None:
     if not args.RETRY_UNTIL_ACTIVE:
       break
     else:
-      print("Waiting for either ACTIVE or FAILED state")
-      state = wait_on_qr_state(args, list_of_states=["ACTIVE", "FAILED"])
+      if args.WAIT_UNTIL_COMPLETION:
+        print("Waiting for completion or FAILED state")
+        state = wait_on_qr_state(args, list_of_states=["FAILED"], max_wait_time=None)
+      else:
+        print("Waiting for either ACTIVE or FAILED state")
+        state = wait_on_qr_state(args, list_of_states=["ACTIVE", "FAILED"])
       if state == "FAILED" and is_internal_error_13(args):
         print(f"Job {args.RUN_NAME} FAILED with internal error code 13. Retrying...")
+        # delete QR and retry
         run_delete_resource(args)
-        # delete QR
         continue
       else:
         break
